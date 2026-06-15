@@ -2,7 +2,7 @@
 # Python >= 3.10 recommended
 
 # ── Audio / Video acquisition ─────────────────────────────────────────────────
-yt-dlp>=2024.4.9                  # Download audio from YouTube URLs
+                 # Download audio from YouTube URLs
 pydub>=0.25.1                     # Audio file manipulation / format conversion
 ffmpeg-python>=0.2.0              # FFmpeg bindings (FFmpeg binary must be installed separately)
 
@@ -44,4 +44,4 @@ tqdm>=4.66.0                      # Progress bars
 requests>=2.32.0
 langchain-chroma>=0.1.0
 torchvision>=0.17.0
-yt-dlp>=2025.6.9
+yt-dlp>=2026.1.0
