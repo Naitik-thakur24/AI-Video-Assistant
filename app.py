@@ -7,7 +7,7 @@ load_dotenv()
 
 # ============ BACKEND CONFIGURATION ============
 # Local testing ke liye
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = "https://ai-video-assistant-g3ht.onrender.com"
 
 # Production mein (Streamlit Cloud pe):
 # BACKEND_URL = "https://your-app.onrender.com"
