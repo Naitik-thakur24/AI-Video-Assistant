@@ -1,15 +1,18 @@
 import streamlit as st
 import time
+import requests
 from dotenv import load_dotenv
-from utils.audio_processor import process_input
-from core.transcriber import transcribe_all
-from core.summarizer import summarize, generate_title
-from core.extractor import extract_action_items, extract_key_decisions, extract_questions
-from core.rag_engine import build_rag_chain, ask_question
 
 load_dotenv()
 
-# ─── Page Config ────────────────────────────────────────────────────────────────
+# ============ BACKEND CONFIGURATION ============
+# Local testing ke liye
+BACKEND_URL = "http://localhost:8000"
+
+# Production mein (Streamlit Cloud pe):
+# BACKEND_URL = "https://your-app.onrender.com"
+
+# ============ PAGE CONFIG ============
 st.set_page_config(
     page_title="AI Video Assistant",
     page_icon="🎬",
@@ -17,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Custom CSS ─────────────────────────────────────────────────────────────────
+# ============ YOUR EXISTING CSS (same rahega) ============
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap');
@@ -309,7 +312,7 @@ for key, default in {
     "chat_history": [],
     "processing": False,
     "pipeline_done": False,
-    "pipeline_steps": {},
+    "session_id": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -322,7 +325,7 @@ def step_status(steps: dict, key: str) -> str:
     return "dot-pending"
 
 def render_step_bar(label: str, key: str, icon: str):
-    css = step_status(st.session_state.pipeline_steps, key)
+    css = step_status(st.session_state.get("pipeline_steps", {}), key)
     st.markdown(f"""
     <div class="status-bar">
         <div class="status-dot {css}"></div>
@@ -360,7 +363,7 @@ st.markdown('<div class="hero-title">AI Video Assistant</div>', unsafe_allow_htm
 st.markdown('<div class="hero-sub">Transcribe · Summarise · Chat with your meetings</div>', unsafe_allow_html=True)
 st.markdown("---")
 
-# ── Run Pipeline ────────────────────────────────────────────────────────────────
+# ── Run Pipeline via Backend API ────────────────────────────────────────────────
 if run_btn:
     if not source.strip():
         st.error("Please enter a YouTube URL or file path.")
@@ -368,65 +371,63 @@ if run_btn:
         st.session_state.pipeline_done = False
         st.session_state.result = None
         st.session_state.chat_history = []
-        st.session_state.pipeline_steps = {}
+        st.session_state.pipeline_steps = {
+            "audio": "pending", "transcript": "pending", "title": "pending",
+            "summary": "pending", "extract": "pending", "rag": "pending"
+        }
 
         progress_placeholder = st.empty()
-
-        def update_step(key, state):
-            st.session_state.pipeline_steps[key] = state
 
         try:
             with progress_placeholder.container():
                 st.info("⚙️ Pipeline running — see sidebar for live status…")
 
-            update_step("audio", "active")
-            chunks = process_input(source)
-            update_step("audio", "done")
-
-            update_step("transcript", "active")
-            transcript = transcribe_all(chunks, language)
-            update_step("transcript", "done")
-
-            update_step("title", "active")
-            title = generate_title(transcript)
-            update_step("title", "done")
-
-            update_step("summary", "active")
-            summary = summarize(transcript)
-            update_step("summary", "done")
-
-            update_step("extract", "active")
-            action_items  = extract_action_items(transcript)
-            decisions     = extract_key_decisions(transcript)
-            questions     = extract_questions(transcript)
-            update_step("extract", "done")
-
-            update_step("rag", "active")
-            rag_chain = build_rag_chain(transcript)
-            update_step("rag", "done")
-
-            st.session_state.result = {
-                "title": title,
-                "transcript": transcript,
-                "summary": summary,
-                "action_items": action_items,
-                "key_decisions": decisions,
-                "open_questions": questions,
-                "rag_chain": rag_chain,
-            }
-            st.session_state.pipeline_done = True
-            progress_placeholder.success("✅ Analysis complete!")
-            time.sleep(0.5)
-            progress_placeholder.empty()
-            st.rerun()
-
+            # Update steps via backend
+            st.session_state.pipeline_steps["audio"] = "active"
+            
+            # Call backend API
+            response = requests.post(
+                f"{BACKEND_URL}/process-video",
+                json={"url": source, "language": language},
+                timeout=600  # 10 minutes timeout
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get("success"):
+                    # Update all steps to done
+                    for step in ["audio", "transcript", "title", "summary", "extract", "rag"]:
+                        st.session_state.pipeline_steps[step] = "done"
+                    
+                    st.session_state.result = {
+                        "title": data["title"],
+                        "transcript": data["transcript"],
+                        "summary": data["summary"],
+                        "action_items": data["action_items"],
+                        "key_decisions": data["key_decisions"],
+                        "open_questions": data["open_questions"],
+                        "rag_chain": None  # Will be handled by session
+                    }
+                    st.session_state.session_id = data["session_id"]
+                    st.session_state.pipeline_done = True
+                    progress_placeholder.success("✅ Analysis complete!")
+                    time.sleep(0.5)
+                    progress_placeholder.empty()
+                    st.rerun()
+                else:
+                    st.error(f"❌ {data.get('error', 'Processing failed')}")
+            else:
+                st.error(f"❌ Backend error: {response.status_code} - {response.json().get('detail', 'Unknown error')}")
+                
+        except requests.exceptions.Timeout:
+            progress_placeholder.error("⏰ Processing timeout. Try a shorter video (under 10 minutes).")
+        except requests.exceptions.ConnectionError:
+            progress_placeholder.error(f"🔌 Cannot connect to backend at {BACKEND_URL}. Is the backend running?")
         except Exception as e:
-            for k in ["audio","transcript","title","summary","extract","rag"]:
-                if st.session_state.pipeline_steps.get(k) == "active":
-                    st.session_state.pipeline_steps[k] = "pending"
             progress_placeholder.error(f"❌ Error: {e}")
 
-# ── Results ──────────────────────────────────────────────────────────────────────
+# ── Chat via Backend API ────────────────────────────────────────────────────────
 if st.session_state.result:
     r = st.session_state.result
 
@@ -479,7 +480,7 @@ if st.session_state.result:
 
     st.markdown("---")
 
-    # ── RAG Chat ──────────────────────────────────────────────────────────────
+    # ── RAG Chat via Backend ──────────────────────────────────────────────────
     st.markdown('<div style="font-family:\'Syne\',sans-serif;font-size:1.2rem;font-weight:700;margin-bottom:1rem">💬 Chat with your Meeting</div>', unsafe_allow_html=True)
 
     # Chat history display
@@ -507,7 +508,7 @@ if st.session_state.result:
             <div style="color:var(--text-muted);font-size:0.85rem">Ask anything about your meeting transcript</div>
         </div>""", unsafe_allow_html=True)
 
-    # Chat input
+    # Chat input - using backend API
     chat_col1, chat_col2 = st.columns([5, 1], gap="small")
     with chat_col1:
         user_input = st.text_input("Your question", placeholder="What were the main decisions made?", label_visibility="collapsed")
@@ -516,9 +517,23 @@ if st.session_state.result:
 
     if send_btn and user_input.strip():
         with st.spinner("Thinking…"):
-            answer = ask_question(r["rag_chain"], user_input.strip())
-        st.session_state.chat_history.append({"role": "user",      "content": user_input.strip()})
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+            try:
+                chat_response = requests.post(
+                    f"{BACKEND_URL}/chat",
+                    json={
+                        "question": user_input.strip(),
+                        "session_id": st.session_state.session_id
+                    },
+                    timeout=30
+                )
+                if chat_response.status_code == 200:
+                    answer = chat_response.json()["answer"]
+                    st.session_state.chat_history.append({"role": "user", "content": user_input.strip()})
+                    st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                else:
+                    st.error("Failed to get answer from backend")
+            except Exception as e:
+                st.error(f"Chat error: {e}")
         st.rerun()
 
     if st.session_state.chat_history:
